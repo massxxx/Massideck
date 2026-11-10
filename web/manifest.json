@@ -1,0 +1,13 @@
+{
+  "name": "MassiDeck",
+  "short_name": "MassiDeck",
+  "description": "Il telefono diventa una pulsantiera per il PC",
+  "start_url": "./",
+  "display": "fullscreen",
+  "background_color": "#101218",
+  "theme_color": "#101218",
+  "icons": [
+    {"src": "icona-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icona-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}
