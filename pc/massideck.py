@@ -263,8 +263,10 @@ def ip_locali():
                 ips.append(ip)
     except Exception:
         pass
+    ips = list(dict.fromkeys(ips))
     # prima gli indirizzi di casa
-    ips.sort(key=lambda i: 0 if i.startswith(("192.168.", "10.", "172.")) else 1)
+    if not reti_windows():
+        ips.sort(key=lambda i: 0 if i.startswith(("192.168.", "10.", "172.")) else 1)
     return ips or ["127.0.0.1"]
 
 
