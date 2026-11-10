@@ -22,7 +22,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
-VERSIONE = "1.0"
+VERSIONE = "1.1"
 PORTA = int(os.environ.get("MASSIDECK_PORTA", "8765"))
 WINDOWS = sys.platform.startswith("win")
 
@@ -181,8 +181,74 @@ def nuovo_pin():
 
 
 # ---------------------------------------------------------------- rete
+def ps(comando, attesa=8):
+    """Esegue PowerShell senza finestra e restituisce il testo (solo Windows)."""
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", comando],
+                           capture_output=True, text=True, timeout=attesa, creationflags=0x08000000)
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+
+_CACHE = {}
+
+
+def in_cache(chiave, durata, funzione):
+    v = _CACHE.get(chiave)
+    if v and time.time() - v[0] < durata:
+        return v[1]
+    r = funzione()
+    _CACHE[chiave] = (time.time(), r)
+    return r
+
+
+def _ip_windows():
+    out = ps("Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | "
+             "ForEach-Object { $_.IPv4Address.IPAddress + '|' + $_.InterfaceAlias + '|' + $_.NetProfile.NetworkCategory }")
+    righe = []
+    for r in out.splitlines():
+        parti = r.strip().split("|")
+        if len(parti) == 3 and parti[0] and not parti[0].startswith("169.254"):
+            righe.append({"ip": parti[0], "scheda": parti[1], "tipo": parti[2]})
+    return righe
+
+
+def reti_windows():
+    return in_cache("reti", 20, _ip_windows) if WINDOWS else []
+
+
+def _firewall():
+    out = ps("$r = Get-NetFirewallRule -DisplayName 'MassiDeck' -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' }; "
+             "$b = @(Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object { $_.Program -like '*MassiDeck*' } | "
+             "Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq 'True' -and $_.Action -eq 'Block' }).Count; "
+             "if ($r) { 'ok|' + $b } else { 'manca|' + $b }", 15)
+    parti = out.split("|")
+    return {"regola": parti[0] == "ok", "blocchi": int(parti[1]) if len(parti) > 1 and parti[1].isdigit() else 0,
+            "letto": bool(out)}
+
+
+def stato_firewall():
+    return in_cache("fw", 15, _firewall) if WINDOWS else {"regola": True, "blocchi": 0, "letto": False}
+
+
+def sblocca_firewall():
+    """Toglie i blocchi di Windows per MassiDeck e apre la porta su tutte le reti (chiede l'amministratore)."""
+    exe = sys.executable
+    comandi = ('netsh advfirewall firewall delete rule name=all program="%s" & '
+               'netsh advfirewall firewall delete rule name="MassiDeck" & '
+               'netsh advfirewall firewall add rule name="MassiDeck" dir=in action=allow protocol=TCP localport=%d profile=any'
+               % (exe, PORTA))
+    if not WINDOWS:
+        log("   (prova) firewall: " + comandi)
+        return True
+    r = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", "/c " + comandi, None, 0)
+    _CACHE.pop("fw", None)
+    return r > 32
+
+
 def ip_locali():
-    ips = []
+    ips = [r["ip"] for r in reti_windows()]
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("10.255.255.255", 1))
@@ -416,6 +482,7 @@ TIPI = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=ut
         ".css": "text/css; charset=utf-8", ".json": "application/json", ".png": "image/png",
         ".svg": "image/svg+xml", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json"}
 TENTATIVI = {}  # ip -> [errori, momento]
+VISTI = set()
 
 
 class Gestore(BaseHTTPRequestHandler):
@@ -466,6 +533,10 @@ class Gestore(BaseHTTPRequestHandler):
 
     # -- GET
     def do_GET(self):
+        ip = self.client_address[0]
+        if not self.locale() and ip not in VISTI:
+            VISTI.add(ip)
+            log("Il telefono %s raggiunge il PC ✓" % ip)
         u = urlparse(self.path)
         p = u.path
         if p == "/api/ping":
@@ -487,7 +558,8 @@ class Gestore(BaseHTTPRequestHandler):
                 return self.rispondi(200, {"pin": SEGRETI["pin"], "ip": ip_locali(), "porta": PORTA,
                                            "nome": socket.gethostname(), "windows": WINDOWS,
                                            "avvio": avvio_automatico(), "telefoni": len(SEGRETI.get("token", [])),
-                                           "registro": REGISTRO[-15:], "versione": VERSIONE, "dati": DATI})
+                                           "registro": REGISTRO[-15:], "versione": VERSIONE, "dati": DATI,
+                                           "reti": reti_windows(), "firewall": stato_firewall()})
             return self.rispondi(404, {"errore": "?"})
         # file della pagina
         if p in ("", "/"):
@@ -582,6 +654,10 @@ class Gestore(BaseHTTPRequestHandler):
             nuovo_pin()
             log("Nuovo PIN: i telefoni devono ricollegarsi")
             return self.rispondi(200, {"pin": SEGRETI["pin"]})
+        if p == "/api/firewall":
+            ok = sblocca_firewall()
+            log("Firewall: richiesta di sblocco " + ("inviata" if ok else "annullata"))
+            return self.rispondi(200, {"ok": ok})
         if p == "/api/avvio":
             return self.rispondi(200, {"avvio": avvio_automatico(bool(dati.get("attivo")))})
         if p == "/api/chiudi":

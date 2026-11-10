@@ -47,6 +47,8 @@ jobs:
           Stop-Process -Name notepad -ErrorAction SilentlyContinue
           $pc = Invoke-RestMethod http://127.0.0.1:8765/api/pc
           "IP: $($pc.ip -join ', ')  PIN: $($pc.pin)"
+          "Reti: $($pc.reti | ConvertTo-Json -Compress)  Firewall: $($pc.firewall | ConvertTo-Json -Compress)"
+          if (-not $pc.firewall.letto) { throw 'stato firewall non letto' }
           Stop-Process -Id $p.Id
       - name: MassiDeck.exe
         shell: pwsh

@@ -704,7 +704,7 @@
     var ultimo = '';
     function aggiorna() {
       richiesta('GET', '/api/pc').then(function (d) {
-        var firma = JSON.stringify([d.pin, d.ip, d.avvio, d.telefoni]);
+        var firma = JSON.stringify([d.pin, d.ip, d.avvio, d.telefoni, d.firewall, d.reti]);
         var reg = (d.registro || []).slice().reverse().join('\n') || '—';
         if (firma === ultimo) { var r = box.querySelector('.registro'); if (r) r.textContent = reg; return; }
         ultimo = firma;
@@ -718,13 +718,41 @@
           richiesta('POST', '/api/avvio', { attivo: avvio.checked }).then(function (r) { toast(r.avvio ? 'Partirà da solo all\'accensione del PC' : 'Avvio automatico tolto'); ultimo = ''; aggiorna(); });
         });
         box.innerHTML = '';
+        var fw = d.firewall || {};
+        var pubblica = (d.reti || []).some(function (r) { return r.tipo === 'Public'; });
+        var problema = d.windows && (!fw.regola || fw.blocchi > 0);
+        var boxFw = null;
+        if (d.windows) {
+          boxFw = el('div', { class: 'fw ' + (problema ? 'attenzione' : 'bene') }, problema ? [
+            el('b', { text: '⚠️ Il firewall di Windows può bloccare il telefono' }),
+            el('div', { text: (fw.blocchi > 0 ? 'Windows ha un blocco per MassiDeck. ' : '') + (pubblica ? 'Il Wi-Fi è impostato come rete pubblica. ' : '') + 'Premi qui sotto e rispondi «Sì» alla finestra di Windows.' }),
+            el('button', { class: 'pri', text: '🛡️ Sblocca nel firewall', onclick: function () {
+              richiesta('POST', '/api/firewall', {}).then(function (r) {
+                toast(r.ok ? 'Fatto: ora riprova dal telefono' : 'Serve rispondere «Sì» alla finestra di Windows');
+                setTimeout(function () { ultimo = ''; aggiorna(); }, 2500);
+              });
+            } })
+          ] : [el('span', { text: '✓ Firewall a posto: il telefono può collegarsi' })]);
+        }
+        var reti = (d.reti || []).map(function (r) { return r.ip + ' — ' + r.scheda + (r.tipo === 'Public' ? ' (rete pubblica)' : r.tipo === 'Private' ? ' (rete privata)' : ''); });
         [
+          boxFw,
           el('h2', { text: '📡 Collega il telefono' }),
           el('div', { class: 'piccolo', text: 'Inquadra con la fotocamera del telefono (stesso Wi-Fi):' }),
           qr,
           el('div', { class: 'piccolo', text: 'oppure apri nel browser del telefono:' }),
           el('div', { class: 'grande', text: url.replace('http://', '') }),
           d.ip.length > 1 ? el('div', { class: 'piccolo', text: 'Altri indirizzi: ' + d.ip.slice(1).join(', ') }) : null,
+          reti.length ? el('div', { class: 'piccolo', text: 'Rete: ' + reti.join(' · ') }) : null,
+          el('details', { class: 'aiuto', style: 'margin-top:10px' }, [
+            el('summary', { text: 'Il telefono non si collega?' }),
+            el('ol', null, [
+              el('li', { text: 'Premi «Sblocca nel firewall» qui sopra (se c\'è) e rispondi Sì.' }),
+              el('li', { text: 'Il telefono deve essere sul Wi-Fi di casa, non con i dati mobili né sulla rete «ospiti».' }),
+              el('li', { text: 'Dal browser del telefono apri ' + url + '/api/ping : se compare una riga con «MassiDeck» la rete funziona.' }),
+              el('li', { text: 'In «Ultime azioni» qui sotto deve comparire «Il telefono … raggiunge il PC». Se non compare, il telefono non arriva al PC.' })
+            ])
+          ]),
           el('h3', { text: 'PIN' }),
           el('div', { class: 'grande pin', text: d.pin }),
           el('div', { class: 'riga' }, [
